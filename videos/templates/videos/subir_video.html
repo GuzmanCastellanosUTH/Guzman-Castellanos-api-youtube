@@ -1,0 +1,374 @@
+<!-- TEMPLATE: Lista de Mis Videos -->
+{% extends 'videos/base.html' %}
+
+{% block title %}Mis Videos | YouTube Manager{% endblock %}
+
+{% block content %}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subir Video a YouTube</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: #FF0000;
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        
+        .content {
+            padding: 40px;
+        }
+        
+        .auth-section {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 30px;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .auth-section.connected {
+            background: #d4edda;
+            border: 2px solid #28a745;
+        }
+        
+        .auth-section.not-connected {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+        }
+        
+        .btn {
+            display: inline-block;
+            padding: 12px 30px;
+            border-radius: 25px;
+            text-decoration: none;
+            font-weight: bold;
+            transition: all 0.3s;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        
+        .btn-youtube {
+            background: #FF0000;
+            color: white;
+        }
+        
+        .btn-youtube:hover {
+            background: #cc0000;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(255,0,0,0.3);
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102,126,234,0.3);
+        }
+        
+        .form-group {
+            margin-bottom: 25px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border 0.3s;
+        }
+        
+        .form-group input:focus,
+        .form-group textarea:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .form-group textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+        
+        .file-upload {
+            border: 3px dashed #667eea;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .file-upload:hover {
+            background: #f8f9ff;
+            border-color: #5568d3;
+        }
+        
+        .file-upload input[type="file"] {
+            display: none;
+        }
+        
+        .file-info {
+            margin-top: 15px;
+            padding: 15px;
+            background: #e8f0fe;
+            border-radius: 8px;
+            display: none;
+        }
+        
+        .file-info.show {
+            display: block;
+        }
+        
+        .messages {
+            margin-bottom: 20px;
+        }
+        
+        .alert {
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+        
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .alert-warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        
+        .progress {
+            display: none;
+            margin-top: 20px;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #e0e0e0;
+            border-radius: 15px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            width: 0%;
+            transition: width 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+        
+        .upload-icon {
+            font-size: 60px;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📹 Subir Video a YouTube</h1>
+            <p>Comparte tus videos con el mundo</p>
+        </div>
+        
+        <div class="content">
+            <!-- Mensajes -->
+            {% if messages %}
+            <div class="messages">
+                {% for message in messages %}
+                <div class="alert alert-{% if message.tags %}{{ message.tags }}{% endif %}">
+                    {{ message }}
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+            
+            <!-- Sección de autenticación -->
+            <div class="auth-section {% if tiene_credenciales %}connected{% else %}not-connected{% endif %}">
+                {% if tiene_credenciales %}
+                    <h3>✅ Conectado con YouTube</h3>
+                    <p>Puedes subir videos a tu canal</p>
+                {% else %}
+                    <h3>⚠️ Conexión requerida</h3>
+                    <p>Necesitas conectar tu cuenta de YouTube para subir videos</p>
+                    <br>
+                    <a href="{% url 'videos:oauth_authorize' %}" class="btn btn-youtube">
+                        🔗 Conectar con YouTube
+                    </a>
+                {% endif %}
+            </div>
+            
+            {% if tiene_credenciales %}
+            <!-- Formulario de subida -->
+            <form method="post" action="{% url 'videos:procesar_subida' %}" enctype="multipart/form-data" id="uploadForm">
+                {% csrf_token %}
+                
+                <div class="form-group">
+                    <label for="video">Archivo de Video *</label>
+                    <div class="file-upload" onclick="document.getElementById('videoFile').click()">
+                        <div class="upload-icon">📁</div>
+                        <p><strong>Haz clic para seleccionar un video</strong></p>
+                        <p style="color: #666; font-size: 14px;">Formatos: MP4, AVI, MOV (máx. 2GB)</p>
+                        <input type="file" id="videoFile" name="video" accept="video/*" required>
+                    </div>
+                    <div class="file-info" id="fileInfo">
+                        <strong>Archivo seleccionado:</strong>
+                        <p id="fileName"></p>
+                        <p id="fileSize"></p>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="titulo">Título del Video *</label>
+                    <input type="text" id="titulo" name="titulo" required maxlength="100" 
+                           placeholder="Ejemplo: Tutorial de Python para principiantes">
+                </div>
+                
+                <div class="form-group">
+                    <label for="descripcion">Descripción</label>
+                    <textarea id="descripcion" name="descripcion" 
+                              placeholder="Describe de qué trata tu video..."></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label for="categoria">Categoría</label>
+                    <select id="categoria" name="categoria">
+                        <option value="27">Educación</option>
+                        <option value="28">Ciencia y Tecnología</option>
+                        <option value="22">Blogs y Personas</option>
+                        <option value="24">Entretenimiento</option>
+                        <option value="20">Gaming</option>
+                        <option value="26">Cómo hacer y Estilo</option>
+                        <option value="10">Música</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="privacidad">Privacidad</label>
+                    <select id="privacidad" name="privacidad">
+                        <option value="private">Privado (solo tú)</option>
+                        <option value="unlisted">No listado (con enlace)</option>
+                        <option value="public">Público (todos)</option>
+                    </select>
+                </div>
+                
+                <div class="progress" id="progressSection">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill">0%</div>
+                    </div>
+                </div>
+                
+                <button type="submit" class="btn btn-primary" id="submitBtn">
+                    🚀 Subir Video a YouTube
+                </button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+    
+    <script>
+        // Manejo de selección de archivo
+        const fileInput = document.getElementById('videoFile');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const fileSize = document.getElementById('fileSize');
+        
+        fileInput.addEventListener('change', function() {
+            if (this.files && this.files[0]) {
+                const file = this.files[0];
+                fileName.textContent = file.name;
+                
+                const sizeInMB = (file.size / (1024 * 1024)).toFixed(2);
+                fileSize.textContent = `Tamaño: ${sizeInMB} MB`;
+                
+                fileInfo.classList.add('show');
+            }
+        });
+        
+        // Manejo del formulario
+        const form = document.getElementById('uploadForm');
+        const submitBtn = document.getElementById('submitBtn');
+        const progressSection = document.getElementById('progressSection');
+        
+        if (form) {
+            form.addEventListener('submit', function() {
+                submitBtn.disabled = true;
+                submitBtn.textContent = '⏳ Subiendo video...';
+                progressSection.style.display = 'block';
+                
+                // Simulación de progreso (en producción esto vendría del servidor)
+                let progress = 0;
+                const interval = setInterval(() => {
+                    progress += 5;
+                    if (progress >= 95) {
+                        clearInterval(interval);
+                    }
+                    document.getElementById('progressFill').style.width = progress + '%';
+                    document.getElementById('progressFill').textContent = progress + '%';
+                }, 500);
+            });
+        }
+    </script>
+</body>
+</html>
+{% endblock %}

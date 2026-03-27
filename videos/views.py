@@ -1,205 +1,146 @@
 from django.shortcuts import render, redirect, get_object_or_404
-from django.contrib.auth.decorators import login_required
-from django.contrib.auth import authenticate, login, logout
-from django.contrib.auth.models import User
-from django.http import JsonResponse
 from django.contrib import messages
 from django.conf import settings
-
-# Google API Client
+from functools import wraps
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-
 import os
-import json
 from datetime import datetime
-
 from .models import Video
+import secrets
 
-# ⚠️ IMPORTANTE: Permitir HTTP para desarrollo local
-os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+# ============ PERMITIR HTTP EN DESARROLLO ============
+# ⚠️ SOLO PARA DESARROLLO LOCAL - NUNCA EN PRODUCCIÓN
+if settings.DEBUG:
+    os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
-# ============================================================
-# VISTAS DE AUTENTICACIÓN
-# ============================================================
+def require_youtube_auth(view_func):
+    """Decorador que verifica autenticación con YouTube OAuth"""
+    @wraps(view_func)
+    def wrapper(request, *args, **kwargs):
+        if 'youtube_credentials' not in request.session:
+            messages.warning(request, 'Debes autorizar el acceso a YouTube primero.')
+            return redirect('videos:oauth_authorize')
+        return view_func(request, *args, **kwargs)
+    return wrapper
 
-def login_view(request):
-    """Vista de login de usuarios"""
-    
-    if request.method == 'POST':
-        username = request.POST.get('username')
-        password = request.POST.get('password')
-        
-        user = authenticate(request, username=username, password=password)
-        
-        if user is not None:
-            login(request, user)
-            messages.success(request, f'¡Bienvenido {user.username}!')
-            
-            # Redirigir a la página solicitada o al inicio
-            next_url = request.GET.get('next', '/')
-            return redirect(next_url)
-        else:
-            messages.error(request, 'Usuario o contraseña incorrectos')
-    
-    return render(request, 'videos/login.html')
-
-
-def logout_view(request):
-    if request.method == 'POST':
-        logout(request)
-        return redirect('videos:inicio')
-    return redirect('videos:inicio')
-
-
-def registro_view(request):
-    """Registro de nuevos usuarios"""
-    
-    if request.method == 'POST':
-        username = request.POST.get('username')
-        email = request.POST.get('email')
-        password = request.POST.get('password')
-        password2 = request.POST.get('password2')
-        
-        # Validaciones
-        if password != password2:
-            messages.error(request, 'Las contraseñas no coinciden')
-            return render(request, 'videos/registro.html')
-        
-        if User.objects.filter(username=username).exists():
-            messages.error(request, 'El nombre de usuario ya existe')
-            return render(request, 'videos/registro.html')
-        
-        if User.objects.filter(email=email).exists():
-            messages.error(request, 'El email ya está registrado')
-            return render(request, 'videos/registro.html')
-        
-        # Crear usuario
-        user = User.objects.create_user(
-            username=username,
-            email=email,
-            password=password
-        )
-        
-        # Login automático
-        login(request, user)
-        messages.success(request, f'¡Cuenta creada exitosamente! Bienvenido {username}')
-        return redirect('videos:inicio')
-    
-    return render(request, 'videos/registro.html')
-
-
-# ============================================================
-# VISTAS PRINCIPALES
-# ============================================================
 
 def inicio(request):
-    """Dashboard principal con videos destacados"""
-    
-    videos = Video.objects.all().order_by('-fecha_publicacion')[:12]
-    
-    contexto = {
+    """Dashboard principal"""
+    youtube_conectado = 'youtube_credentials' in request.session
+    user_info = request.session.get('youtube_user_info', {})
+
+    # Estadísticas básicas
+    total_videos = 0
+    vistas = 0
+    likes = 0
+    videos = []
+
+    if youtube_conectado:
+        try:
+            creds_data = request.session.get('youtube_credentials')
+            credentials = Credentials(**creds_data)
+            youtube = build('youtube', 'v3', credentials=credentials)
+
+            # Obtener videos del canal
+            channels_response = youtube.channels().list(
+                mine=True,
+                part='statistics'
+            ).execute()
+
+            if channels_response.get('items'):
+                stats = channels_response['items'][0]['statistics']
+                total_videos = stats.get('videoCount', 0)
+                vistas = stats.get('viewCount', 0)
+        except:
+            pass
+
+    context = {
+        'youtube_conectado': youtube_conectado,
+        'user_info': user_info,
+        'total_videos': total_videos,
+        'vistas': vistas,
+        'likes': likes,
         'videos': videos,
-        'total_videos': Video.objects.count(),
-        'total_views': sum(v.vistas for v in videos) if videos else 0,
-        'total_likes': sum(v.likes for v in videos) if videos else 0,
     }
-    
-    return render(request, 'videos/inicio.html', contexto)
+    return render(request, 'videos/inicio.html', context)
 
 
-# ============================================================
-# OAUTH YOUTUBE
-# ============================================================
-
-@login_required
 def oauth_authorize(request):
-    """Redirige a Google OAuth para autorización"""
-    
-    client_config = {
-        "web": {
-            "client_id": settings.GOOGLE_CLIENT_ID,
-            "client_secret": settings.GOOGLE_CLIENT_SECRET,
-            "redirect_uris": [settings.GOOGLE_REDIRECT_URI],
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token"
-        }
-    }
-    
     try:
-        flow = Flow.from_client_config(
-            client_config,
-            scopes=settings.YOUTUBE_SCOPES,
-            redirect_uri=settings.GOOGLE_REDIRECT_URI
+        state = secrets.token_urlsafe(32)
+
+        flow = Flow.from_client_secrets_file(
+            settings.GOOGLE_CLIENT_SECRETS_FILE,
+            scopes=settings.YOUTUBE_SCOPES
         )
-        
-        # flow.authorization_url genera automáticamente el code_verifier internamente
-        authorization_url, state = flow.authorization_url(
+
+        # 🔥 FORZAR redirect_uri AQUÍ (NO en constructor)
+        flow.redirect_uri = "https://ruizvegaluis.pythonanywhere.com/oauth/callback/"
+
+        authorization_url, _ = flow.authorization_url(
             access_type='offline',
             include_granted_scopes='true',
-            prompt='consent'
+            prompt='consent',
+            state=state
         )
-        
-        # 🔥 CLAVE: Guardamos el state Y el code_verifier en la sesión
+
+        print("🚀 AUTH URL:", authorization_url)  # 👈 CLAVE
+
         request.session['oauth_state'] = state
-        request.session['oauth_verifier'] = flow.code_verifier 
-        
         request.session.modified = True
-        print(f"DEBUG: State guardado: {state}")
-        
+
         return redirect(authorization_url)
-        
+
     except Exception as e:
-        messages.error(request, f'❌ Error al iniciar OAuth: {str(e)}')
+        import traceback
+        print(traceback.format_exc())
         return redirect('videos:inicio')
 
 
 def oauth_callback(request):
-    """Recibe código de autorización y obtiene tokens"""
-    
-    # 1. Recuperar datos de la sesión
-    state_session = request.session.get('oauth_state')
-    verifier = request.session.get('oauth_verifier')
-    
-    state_url = request.GET.get('state')
-    
-    print(f"DEBUG: Verifier recuperado: {'SÍ' if verifier else 'NO'}")
-    
-    if not state_session or state_session != state_url:
-        messages.error(request, '❌ Error de validación de estado (State mismatch).')
-        return redirect('videos:oauth_authorize')
-    
+    """Callback de OAuth - Recibe el código de autorización"""
     try:
-        client_config = {
-            "web": {
-                "client_id": settings.GOOGLE_CLIENT_ID,
-                "client_secret": settings.GOOGLE_CLIENT_SECRET,
-                "redirect_uris": [settings.GOOGLE_REDIRECT_URI],
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token"
-            }
-        }
-        
-        # 2. Re-instanciar el flow con el state de la URL
-        flow = Flow.from_client_config(
-            client_config,
+        # Debug: Ver qué hay en la sesión
+        print(f"🔍 Sesión completa: {dict(request.session.items())}")
+
+        # Obtener state de la URL
+        state_from_url = request.GET.get('state')
+        state_from_session = request.session.get('oauth_state')
+
+        print(f"🔑 State desde URL: {state_from_url}")
+        print(f"🔒 State desde sesión: {state_from_session}")
+
+        # Verificación más flexible
+        if not state_from_url:
+            raise ValueError('No se recibió state en la URL')
+
+        if not state_from_session:
+            # Intentar recuperar de otra manera
+            messages.warning(request, 'Sesión expirada. Reintentando autorización...')
+            return redirect('videos:oauth_authorize')
+
+        if state_from_url != state_from_session:
+            raise ValueError(f'State mismatch: URL={state_from_url}, Session={state_from_session}')
+
+        # Continuar con el flujo OAuth
+        flow = Flow.from_client_secrets_file(
+            settings.GOOGLE_CLIENT_SECRETS_FILE,
             scopes=settings.YOUTUBE_SCOPES,
-            state=state_url,
+            state=state_from_url,  # Usar el state de la URL
             redirect_uri=settings.GOOGLE_REDIRECT_URI
         )
-        
-        # 3. 🔥 ASIGNAR EL VERIFICADOR ANTES DE PEDIR EL TOKEN
-        flow.code_verifier = verifier
 
-        # 4. Obtener el token
-        authorization_response = request.build_absolute_uri()
+        authorization_response = request.build_absolute_uri().replace('http://', 'https://')
+        print(f"🌐 Authorization response URL: {authorization_response}")
+
         flow.fetch_token(authorization_response=authorization_response)
-        
+
         credentials = flow.credentials
-        
-        # 5. Guardar credenciales
+
+        # Guardar credenciales en sesión
         request.session['youtube_credentials'] = {
             'token': credentials.token,
             'refresh_token': credentials.refresh_token,
@@ -208,30 +149,315 @@ def oauth_callback(request):
             'client_secret': credentials.client_secret,
             'scopes': credentials.scopes
         }
-        
-        # Limpiar sesión
-        if 'oauth_state' in request.session: del request.session['oauth_state']
-        if 'oauth_verifier' in request.session: del request.session['oauth_verifier']
-        
-        messages.success(request, '✅ Conectado exitosamente con YouTube')
-        return redirect('videos:subir_video')
-        
+
+        # Obtener info del canal
+        youtube = build('youtube', 'v3', credentials=credentials)
+        channels_response = youtube.channels().list(
+            mine=True,
+            part='snippet,statistics'
+        ).execute()
+
+        if channels_response.get('items'):
+            channel = channels_response['items'][0]
+            request.session['youtube_user_info'] = {
+                'channel_title': channel['snippet']['title'],
+                'channel_id': channel['id'],
+                'thumbnail': channel['snippet']['thumbnails']['default']['url'],
+                'subscribers': channel['statistics'].get('subscriberCount', 'N/A')
+            }
+
+        # Limpiar state usado
+        if 'oauth_state' in request.session:
+            del request.session['oauth_state']
+
+        request.session.modified = True
+
+        messages.success(request, '✅ ¡Autenticación exitosa con YouTube!')
+        return redirect('videos:inicio')
+
     except Exception as e:
-        print(f"Error detallado en callback: {str(e)}")
-        messages.error(request, f'❌ Error en callback: {str(e)}')
-        return redirect('videos:oauth_authorize')
+        messages.error(request, f'❌ Error en callback OAuth: {str(e)}')
+        import traceback
+        print(traceback.format_exc())
+        return redirect('videos:inicio')
 
 
-# ============================================================
-# BÚSQUEDA DE VIDEOS
-# ============================================================
+@require_youtube_auth
+def mis_videos(request):
+    """Lista de videos del canal"""
+    try:
+        creds_data = request.session.get('youtube_credentials')
+        credentials = Credentials(**creds_data)
+        youtube = build('youtube', 'v3', credentials=credentials)
+
+        # Obtener videos del canal
+        request_videos = youtube.search().list(
+            part='snippet',
+            forMine=True,
+            type='video',
+            maxResults=50,
+            order='date'
+        )
+
+        response = request_videos.execute()
+        videos_list = []
+
+        for item in response.get('items', []):
+            video_id = item['id']['videoId']
+
+            # Obtener estadísticas
+            stats_response = youtube.videos().list(
+                part='statistics',
+                id=video_id
+            ).execute()
+
+            stats = stats_response['items'][0]['statistics'] if stats_response.get('items') else {}
+
+            videos_list.append({
+                'id': video_id,
+                'youtube_id': video_id,
+                'titulo': item['snippet']['title'],
+                'url_thumbnail': item['snippet']['thumbnails']['medium']['url'],
+                'canal_nombre': item['snippet']['channelTitle'],
+                'fecha_publicacion': item['snippet']['publishedAt'],
+                'vistas': stats.get('viewCount', 0),
+                'likes': stats.get('likeCount', 0),
+            })
+
+        context = {
+            'videos': videos_list,
+            'total_views': sum(int(v.get('vistas', 0)) for v in videos_list),
+            'total_likes': sum(int(v.get('likes', 0)) for v in videos_list),
+            'total_comments': 0,
+        }
+
+        return render(request, 'videos/mis_videos.html', context)
+
+    except Exception as e:
+        messages.error(request, f'Error al cargar videos: {str(e)}')
+        return redirect('videos:inicio')
+
+
+@require_youtube_auth
+def subir_video(request):
+    """Formulario para subir video"""
+    return render(request, 'videos/subir_video.html')
+
+
+@require_youtube_auth
+def procesar_subida(request):
+    """Sube video a YouTube"""
+
+    print(f"🎬 procesar_subida llamado - Método: {request.method}")
+
+    if request.method == 'POST':
+        try:
+            print("📋 Datos del formulario:")
+            print(f"   Archivos: {list(request.FILES.keys())}")
+            print(f"   POST data: {list(request.POST.keys())}")
+
+            # Verificar que el archivo existe
+            if 'video' not in request.FILES:
+                raise ValueError('No se recibió el archivo de video')
+
+            video_file = request.FILES['video']
+
+            # Obtener y limpiar datos del formulario
+            titulo_raw = request.POST.get('titulo', '')
+            descripcion_raw = request.POST.get('descripcion', '')
+
+            print(f"📝 Datos RAW recibidos:")
+            print(f"   Título RAW: '{titulo_raw}' (len={len(titulo_raw)})")
+            print(f"   Descripción RAW: '{descripcion_raw[:50]}...' (len={len(descripcion_raw)})")
+
+            # Limpiar y validar título
+            titulo = titulo_raw.strip()
+
+            # Si el título está vacío después de strip, usar nombre del archivo
+            if not titulo:
+                titulo = video_file.name.rsplit('.', 1)[0]  # Nombre sin extensión
+                print(f"⚠️ Título vacío, usando nombre de archivo: {titulo}")
+
+            # Limitar longitud del título (YouTube max: 100 caracteres)
+            if len(titulo) > 100:
+                titulo = titulo[:97] + '...'
+                print(f"⚠️ Título recortado a 100 caracteres")
+
+            # Limpiar descripción
+            descripcion = descripcion_raw.strip()
+
+            # Si está vacía, usar descripción por defecto
+            if not descripcion:
+                descripcion = f"Video subido desde Django - {titulo}"
+                print(f"⚠️ Descripción vacía, usando por defecto")
+
+            # Limitar longitud (YouTube max: 5000 caracteres)
+            if len(descripcion) > 5000:
+                descripcion = descripcion[:4997] + '...'
+
+            categoria = request.POST.get('categoria', '27')
+            privacidad = request.POST.get('privacidad', 'private')
+
+            print(f"✅ Datos LIMPIOS:")
+            print(f"   Título: '{titulo}' (len={len(titulo)})")
+            print(f"   Descripción: '{descripcion[:50]}...' (len={len(descripcion)})")
+            print(f"   Categoría: {categoria}")
+            print(f"   Privacidad: {privacidad}")
+            print(f"   Archivo: {video_file.name} ({video_file.size / (1024*1024):.2f} MB)")
+
+            # Validaciones finales
+            if not titulo or len(titulo.strip()) == 0:
+                raise ValueError(f'El título no puede estar vacío. Recibido: "{titulo}"')
+
+            if not descripcion or len(descripcion.strip()) == 0:
+                raise ValueError(f'La descripción no puede estar vacía. Recibido: "{descripcion}"')
+
+            # Obtener credenciales
+            creds_data = request.session.get('youtube_credentials')
+            if not creds_data:
+                raise ValueError('No hay credenciales de YouTube en la sesión')
+
+            print("🔑 Credenciales recuperadas")
+
+            credentials = Credentials(**creds_data)
+            youtube = build('youtube', 'v3', credentials=credentials)
+
+            print("✅ Cliente de YouTube creado")
+
+            # Guardar archivo temporalmente
+            temp_path = os.path.join(settings.MEDIA_ROOT, video_file.name)
+            os.makedirs(settings.MEDIA_ROOT, exist_ok=True)
+
+            print(f"💾 Guardando en: {temp_path}")
+
+            with open(temp_path, 'wb') as f:
+                for chunk in video_file.chunks():
+                    f.write(chunk)
+
+            file_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
+            print(f"✅ Archivo guardado ({file_size_mb:.2f} MB)")
+
+            # Metadata del video - ASEGURAR QUE NO HAYA VALORES VACÍOS
+            body = {
+                'snippet': {
+                    'title': str(titulo),  # Convertir a string explícitamente
+                    'description': str(descripcion),
+                    'categoryId': str(categoria)
+                },
+                'status': {
+                    'privacyStatus': str(privacidad)
+                }
+            }
+
+            # Debug: Imprimir el body que se enviará a YouTube
+            print("📤 Metadata que se enviará a YouTube:")
+            import json
+            print(json.dumps(body, indent=2, ensure_ascii=False))
+
+            print("⬆️ Iniciando subida a YouTube...")
+
+            media = MediaFileUpload(temp_path, resumable=True, chunksize=1024*1024)
+
+            request_upload = youtube.videos().insert(
+                part='snippet,status',
+                body=body,
+                media_body=media
+            )
+
+            # Subir con progreso
+            response = None
+            while response is None:
+                status, response = request_upload.next_chunk()
+                if status:
+                    progress = int(status.progress() * 100)
+                    print(f"⬆️ Progreso: {progress}%")
+
+            print(f"✅ Video subido exitosamente!")
+            print(f"   ID: {response['id']}")
+            print(f"   Título: {response['snippet']['title']}")
+            print(f"   URL: https://www.youtube.com/watch?v={response['id']}")
+
+            # Eliminar archivo temporal
+            try:
+                os.remove(temp_path)
+                print("🗑️ Archivo temporal eliminado")
+            except Exception as e:
+                print(f"⚠️ No se pudo eliminar: {e}")
+
+            messages.success(
+                request,
+                f'✅ Video "{response["snippet"]["title"]}" subido exitosamente! '
+                f'<a href="https://www.youtube.com/watch?v={response["id"]}" target="_blank" class="alert-link">Ver en YouTube</a>'
+            )
+
+            return redirect('videos:mis_videos')
+
+        except Exception as e:
+            error_msg = str(e)
+            print(f"❌ ERROR: {error_msg}")
+
+            import traceback
+            print("📋 Stack trace completo:")
+            print(traceback.format_exc())
+
+            messages.error(request, f'❌ Error al subir video: {error_msg}')
+            return redirect('videos:subir_video')
+
+    else:
+        print("⚠️ Método no es POST")
+        return redirect('videos:subir_video')
+
+
+def detalle_video(request, video_id):
+    """Detalle de un video"""
+    try:
+        youtube = build(
+            settings.YOUTUBE_API_SERVICE_NAME,
+            settings.YOUTUBE_API_VERSION,
+            developerKey=settings.YOUTUBE_API_KEY
+        )
+
+        response = youtube.videos().list(
+            part='snippet,statistics,contentDetails',
+            id=video_id
+        ).execute()
+
+        if response.get('items'):
+            item = response['items'][0]
+            video = {
+                'youtube_id': video_id,
+                'titulo': item['snippet']['title'],
+                'descripcion': item['snippet']['description'],
+                'url_video': f'https://www.youtube.com/watch?v={video_id}',
+                'url_thumbnail': item['snippet']['thumbnails']['high']['url'],
+                'canal_nombre': item['snippet']['channelTitle'],
+                'canal_id': item['snippet']['channelId'],
+                'fecha_publicacion': item['snippet']['publishedAt'],
+                'vistas': item['statistics'].get('viewCount', 0),
+                'likes': item['statistics'].get('likeCount', 0),
+                'comentarios': item['statistics'].get('commentCount', 0),
+                'duracion': item['contentDetails']['duration'],
+                'categoria': 'YouTube',
+                'etiquetas': item['snippet'].get('tags', []),
+            }
+
+            # Añadir método get_embed_url
+            video['embed_url'] = f"https://www.youtube.com/embed/{video_id}"
+
+            context = {'video': type('obj', (object,), video)}
+            return render(request, 'videos/detalle_video.html', context)
+
+    except Exception as e:
+        messages.error(request, f'Error al cargar video: {str(e)}')
+
+    return redirect('videos:inicio')
+
 
 def buscar_videos(request):
-    """Busca videos en YouTube por palabra clave"""
-    
+    """Buscar videos en YouTube"""
     query = request.GET.get('q', '')
     resultados = []
-    
+
     if query:
         try:
             youtube = build(
@@ -239,187 +465,19 @@ def buscar_videos(request):
                 settings.YOUTUBE_API_VERSION,
                 developerKey=settings.YOUTUBE_API_KEY
             )
-            
+
             search_response = youtube.search().list(
                 q=query,
                 part='id,snippet',
                 type='video',
                 maxResults=20
             ).execute()
-            
+
             resultados = search_response.get('items', [])
         except Exception as e:
-            messages.error(request, f'❌ Error en búsqueda: {str(e)}')
-    
+            messages.error(request, f'Error en búsqueda: {str(e)}')
+
     return render(request, 'videos/buscar.html', {
         'query': query,
         'resultados': resultados
-    })
-
-
-# ============================================================
-# SUBIR VIDEOS
-# ============================================================
-
-@login_required
-def subir_video(request):
-    """Muestra formulario para subir video"""
-    
-    # Verificar si ya está autenticado
-    tiene_credenciales = 'youtube_credentials' in request.session
-    
-    return render(request, 'videos/subir_video.html', {
-        'tiene_credenciales': tiene_credenciales
-    })
-
-
-@login_required
-def procesar_subida(request):
-    """Sube video a YouTube usando OAuth del usuario"""
-    
-    if request.method != 'POST':
-        messages.error(request, '❌ Método no permitido')
-        return redirect('videos:subir_video')
-    
-    # Verificar credenciales
-    creds_data = request.session.get('youtube_credentials')
-    if not creds_data:
-        messages.error(request, '❌ No estás autorizado. Conecta con YouTube primero.')
-        return redirect('videos:oauth_authorize')
-    
-    try:
-        # Reconstruir credenciales
-        credentials = Credentials(
-            token=creds_data['token'],
-            refresh_token=creds_data.get('refresh_token'),
-            token_uri=creds_data['token_uri'],
-            client_id=creds_data['client_id'],
-            client_secret=creds_data['client_secret'],
-            scopes=creds_data.get('scopes')
-        )
-        
-        # Crear servicio YouTube
-        youtube = build('youtube', 'v3', credentials=credentials)
-        
-        # Obtener datos del formulario
-        if 'video' not in request.FILES:
-            messages.error(request, '❌ No se seleccionó ningún archivo de video')
-            return redirect('videos:subir_video')
-        
-        video_file = request.FILES['video']
-        titulo = request.POST.get('titulo', 'Sin título')
-        descripcion = request.POST.get('descripcion', '')
-        categoria = request.POST.get('categoria', '27')
-        privacidad = request.POST.get('privacidad', 'private')
-        
-        # Validar tamaño del archivo
-        max_size = 2 * 1024 * 1024 * 1024  # 2GB
-        if video_file.size > max_size:
-            messages.error(request, '❌ El archivo es demasiado grande (máximo 2GB)')
-            return redirect('videos:subir_video')
-        
-        # Crear directorio temporal
-        temp_dir = '/tmp/youtube_uploads'
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        # Guardar archivo temporalmente
-        temp_path = os.path.join(temp_dir, video_file.name)
-        with open(temp_path, 'wb') as f:
-            for chunk in video_file.chunks():
-                f.write(chunk)
-        
-        # Metadata del video
-        body = {
-            'snippet': {
-                'title': titulo,
-                'description': descripcion,
-                'categoryId': categoria,
-                'tags': ['educación', 'tutorial']
-            },
-            'status': {
-                'privacyStatus': privacidad,
-                'selfDeclaredMadeForKids': False
-            }
-        }
-        
-        # Preparar archivo para upload
-        media = MediaFileUpload(
-            temp_path,
-            chunksize=1024*1024,
-            resumable=True
-        )
-        
-        # Ejecutar upload
-        request_upload = youtube.videos().insert(
-            part='snippet,status',
-            body=body,
-            media_body=media
-        )
-        
-        # Upload con progreso
-        response = None
-        while response is None:
-            status, response = request_upload.next_chunk()
-            if status:
-                progress = int(status.progress() * 100)
-                print(f"Subido {progress}%")
-        
-        # Limpiar archivo temporal
-        try:
-            os.remove(temp_path)
-        except:
-            pass
-        
-        # Guardar en base de datos
-        Video.objects.create(
-            youtube_id=response['id'],
-            titulo=titulo,
-            descripcion=descripcion,
-            url_video=f"https://www.youtube.com/watch?v={response['id']}",
-            url_thumbnail=f"https://img.youtube.com/vi/{response['id']}/maxresdefault.jpg",
-            canal_id=response['snippet']['channelId'],
-            canal_nombre=response['snippet']['channelTitle'],
-            fecha_publicacion=datetime.now(),
-            categoria='otro',
-            agregado_por=request.user
-        )
-        
-        messages.success(
-            request, 
-            f'✅ Video subido exitosamente! ID: {response["id"]}'
-        )
-        return redirect('videos:mis_videos')
-        
-    except Exception as e:
-        messages.error(request, f'❌ Error al subir video: {str(e)}')
-        print(f"Error detallado: {e}")
-        
-        # Limpiar archivo temporal
-        try:
-            if 'temp_path' in locals():
-                os.remove(temp_path)
-        except:
-            pass
-        
-        return redirect('videos:subir_video')
-
-
-# ============================================================
-# GESTIÓN DE VIDEOS
-# ============================================================
-
-def detalle_video(request, video_id):
-    """Muestra detalles de un video"""
-    video = get_object_or_404(Video, youtube_id=video_id)
-    return render(request, 'videos/detalle_video.html', {
-        'video': video
-    })
-
-
-@login_required
-def mis_videos(request):
-    """Muestra videos subidos por el usuario"""
-    videos = Video.objects.filter(agregado_por=request.user).order_by('-creado')
-    return render(request, 'videos/mis_videos.html', {
-        'videos': videos
     })

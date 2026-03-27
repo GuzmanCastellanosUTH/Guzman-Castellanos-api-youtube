@@ -1,3 +1,4 @@
+<!-- TEMPLATE: Detalle de Video con Player Embebido -->
 {% extends 'videos/base.html' %}
 
 {% block title %}{{ video.titulo }} | YouTube Manager{% endblock %}
@@ -5,21 +6,25 @@
 {% block content %}
 <div class="container mt-5">
     <div class="row">
+        <!-- Video Player -->
         <div class="col-lg-8">
+            <!-- Player de YouTube embebido -->
             <div class="card shadow-lg border-0 mb-4">
                 <div class="card-body p-0">
                     <div class="ratio ratio-16x9">
-                        <iframe src="{{ video.get_embed_url }}" 
-                                title="{{ video.titulo }}" 
-                                allowfullscreen></iframe>
+                        <iframe src="{{ video.embed_url }}"
+                            title="{{ video.titulo }}"
+                            allowfullscreen></iframe>
                     </div>
                 </div>
             </div>
 
+            <!-- Información del Video -->
             <div class="card shadow-sm mb-4">
                 <div class="card-body">
                     <h2 class="mb-3">{{ video.titulo }}</h2>
-                    
+
+                    <!-- Stats en badges -->
                     <div class="mb-3">
                         <span class="badge bg-primary me-2">
                             <i class="fas fa-eye"></i> {{ video.vistas|default:0 }} vistas
@@ -35,6 +40,7 @@
                         </span>
                     </div>
 
+                    <!-- Información del Canal -->
                     <div class="d-flex align-items-center mb-3 pb-3 border-bottom">
                         <i class="fab fa-youtube fa-3x text-danger me-3"></i>
                         <div>
@@ -42,34 +48,37 @@
                             <small class="text-muted">{{ video.fecha_publicacion|date:"d M Y" }}</small>
                         </div>
                         <div class="ms-auto">
-                            <a href="https://www.youtube.com/channel/{{ video.canal_id }}" 
+                            <a href="https://www.youtube.com/channel/{{ video.canal_id }}"
                                target="_blank" class="btn btn-danger">
                                 <i class="fab fa-youtube"></i> Ver Canal
                             </a>
                         </div>
                     </div>
 
+                    <!-- Descripción -->
                     <div>
                         <h6 class="fw-bold">Descripción:</h6>
                         <p class="text-muted">{{ video.descripcion|linebreaks }}</p>
                     </div>
 
+                    <!-- Etiquetas -->
                     {% if video.etiquetas %}
                     <div class="mt-3">
                         <h6 class="fw-bold">Etiquetas:</h6>
-                        {% for tag in video.get_etiquetas_list %}
-                        <span class="badge bg-light text-dark me-1">#{{ tag }}</span>
+                        {% for tag in video.etiquetas %}
+                            <span class="badge bg-light text-dark me-1">#{{ tag }}</span>
                         {% endfor %}
                     </div>
                     {% endif %}
                 </div>
             </div>
 
+            <!-- Botones de Acción -->
             <div class="card shadow-sm">
                 <div class="card-body">
                     <div class="row g-2">
                         <div class="col-md-4">
-                            <a href="https://www.youtube.com/watch?v={{ video.youtube_id }}" 
+                            <a href="https://www.youtube.com/watch?v={{ video.youtube_id }}"
                                target="_blank" class="btn btn-danger w-100">
                                 <i class="fab fa-youtube"></i> Ver en YouTube
                             </a>
@@ -89,7 +98,9 @@
             </div>
         </div>
 
+        <!-- Sidebar -->
         <div class="col-lg-4">
+            <!-- Estadísticas Detalladas -->
             <div class="card shadow-sm mb-4">
                 <div class="card-header bg-dark text-white">
                     <h6 class="mb-0"><i class="fas fa-chart-bar"></i> Estadísticas</h6>
@@ -119,6 +130,7 @@
                 </div>
             </div>
 
+            <!-- Información Técnica -->
             <div class="card shadow-sm mb-4">
                 <div class="card-header bg-secondary text-white">
                     <h6 class="mb-0"><i class="fas fa-info-circle"></i> Información</h6>
@@ -127,30 +139,31 @@
                     <dl class="row mb-0">
                         <dt class="col-sm-6">Video ID:</dt>
                         <dd class="col-sm-6"><code>{{ video.youtube_id }}</code></dd>
-                        
+
                         <dt class="col-sm-6">Duración:</dt>
                         <dd class="col-sm-6">{{ video.duracion|default:"N/A" }}</dd>
-                        
+
                         <dt class="col-sm-6">Categoría:</dt>
                         <dd class="col-sm-6">
-                            <span class="badge bg-primary">{{ video.get_categoria_display }}</span>
+                            <span class="badge bg-primary">{{ video.categoria }}</span>
                         </dd>
-                        
+
                         <dt class="col-sm-6">Agregado por:</dt>
-                        <dd class="col-sm-6">{{ video.agregado_por.username|default:"Sistema" }}</dd>
-                        
+                        <dd class="col-sm-6">{{ video.agregado_por|default:"Sistema" }}</dd>
+
                         <dt class="col-sm-6">Actualizado:</dt>
                         <dd class="col-sm-6">{{ video.actualizado|date:"d/m/Y H:i" }}</dd>
                     </dl>
                 </div>
             </div>
 
+            <!-- QR Code -->
             <div class="card shadow-sm">
                 <div class="card-header bg-info text-white">
                     <h6 class="mb-0"><i class="fas fa-qrcode"></i> Código QR</h6>
                 </div>
                 <div class="card-body text-center">
-                    <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={{ video.url_video }}" 
+                    <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={{ video.url_video }}"
                          alt="QR Code" class="img-fluid rounded shadow-sm">
                     <p class="text-muted small mt-2">Escanea para ver el video</p>
                 </div>
@@ -162,8 +175,8 @@
 <script>
     function compartir() {
         const url = "{{ video.url_video }}";
-        const titulo = "{{ video.titulo|escapejs }}";
-        
+        const titulo = "{{ video.titulo }}";
+
         if (navigator.share) {
             navigator.share({
                 title: titulo,
@@ -172,6 +185,7 @@
                 console.log('Compartido exitosamente');
             }).catch((error) => {
                 console.error('Error al compartir:', error);
+                copiarAlPortapapeles(url);
             });
         } else {
             copiarAlPortapapeles(url);

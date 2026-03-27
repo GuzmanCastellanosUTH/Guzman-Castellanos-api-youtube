@@ -1,27 +1,24 @@
 from django.urls import path
 from . import views
+from . import youtube_service
 
-app_name = 'videos'  # Namespace para URLs
+app_name = 'videos'
 
 urlpatterns = [
-    # ========== PÁGINAS PRINCIPALES ==========
+    # Página principal (NO requiere autenticación)
     path('', views.inicio, name='inicio'),
     
-    # ========== AUTENTICACIÓN ==========
-    path('login/', views.login_view, name='login'),
-    path('logout/', views.logout_view, name='logout'),
-    path('registro/', views.registro_view, name='registro'),
-    
-    # ========== OAUTH YOUTUBE ==========
+    # OAuth 2.0 (NO requiere autenticación de Django)
     path('oauth/authorize/', views.oauth_authorize, name='oauth_authorize'),
     path('oauth/callback/', views.oauth_callback, name='oauth_callback'),
+    #path('oauth/logout/', views.oauth_logout, name='oauth_logout'),
     
-    # ========== GESTIÓN DE VIDEOS ==========
+    # Funcionalidades públicas
     path('buscar/', views.buscar_videos, name='buscar_videos'),
     path('video/<str:video_id>/', views.detalle_video, name='detalle_video'),
-    path('mis-videos/', views.mis_videos, name='mis_videos'),
     
-    # ========== SUBIR VIDEOS ==========
+    # Funcionalidades que requieren OAuth
+    path('mis-videos/', views.mis_videos, name='mis_videos'),
     path('subir/', views.subir_video, name='subir_video'),
     path('subir/procesar/', views.procesar_subida, name='procesar_subida'),
 ]
